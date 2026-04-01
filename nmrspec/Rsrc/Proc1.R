@@ -155,6 +155,26 @@
                 updateButton(session, "unBucket", icon=icon("undo"), label = paste0('Undo',bsUndoLabel), style="primary")
                 values$load <- 1
                 values$proc <- 1
+                # Restore spectral normalization flag from the macro command history
+                pcmdFile <- file.path(outDataViewer, conf$Rnmr1D_PCMD)
+                if (file.exists(pcmdFile)) {
+                    pcmdLines <- readLines(pcmdFile)
+                    normLine <- grep("^normalisation\\s", pcmdLines, value=TRUE)
+                    if (length(normLine) > 0) {
+                        # last normalisation line; format: "normalisation <method>" (new) or "normalisation <p1> <p2>" (legacy)
+                        lastNorm <- tail(normLine, 1)
+                        normTokens <- strsplit(trimws(lastNorm), "\\s+")[[1]]
+                        if (length(normTokens) == 2 && normTokens[2] %in% c("CSN","PQN")) {
+                            values$spectralNormApplied <- normTokens[2]
+                        } else {
+                            values$spectralNormApplied <- "CSN"  # legacy format, defaulted to CSN
+                        }
+                    } else {
+                        values$spectralNormApplied <- ""
+                    }
+                } else {
+                    values$spectralNormApplied <- ""
+                }
            }
        })
        return(values$reload)

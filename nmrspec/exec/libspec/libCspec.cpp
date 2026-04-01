@@ -461,10 +461,19 @@ SEXP C_MedianSpec(SEXP x)
    int count_max = VV.ncol();
    int position = n_specs / 2; // Euclidian division
    NumericVector out(count_max);
-   for (int j = 0; j < count_max; j++) { 
+   for (int j = 0; j < count_max; j++) {
         NumericVector y = VV(_,j); // Copy column -- original will not be mod
-        std::nth_element(y.begin(), y.begin() + position, y.end()); 
-        out[j] = y[position];  
+        if (n_specs % 2 == 0) {
+            // Even count: average the two middle elements
+            std::nth_element(y.begin(), y.begin() + position - 1, y.end());
+            double lower = y[position - 1];
+            std::nth_element(y.begin(), y.begin() + position, y.end());
+            double upper = y[position];
+            out[j] = (lower + upper) / 2.0;
+        } else {
+            std::nth_element(y.begin(), y.begin() + position, y.end());
+            out[j] = y[position];
+        }
    }
    return out;
 }
@@ -1086,7 +1095,11 @@ SEXP C_buckets_CSN_normalize (SEXP b)
        // for each bucket
        sumS=0.0;
        for (m=0; m<n_bucs; m++) sumS += buckets(k,m);
-       for (m=0; m<n_bucs; m++) M(k,m) = 100000.0 * buckets(k,m)/sumS;
+       if (sumS == 0.0) {
+           for (m=0; m<n_bucs; m++) M(k,m) = 0.0;
+       } else {
+           for (m=0; m<n_bucs; m++) M(k,m) = 100000.0 * buckets(k,m)/sumS;
+       }
    }
    return(M);
 }

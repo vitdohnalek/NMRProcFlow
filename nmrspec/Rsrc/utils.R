@@ -323,7 +323,7 @@ get_Data_matrix <- function(outDataViewer, zoneref, zonenoise, quantlevel=4)
         buckets <- read.table(bucketfile, header=F, sep="\t",stringsAsFactors=FALSE)
         buckets <- buckets[ buckets[,2]>0, ]
         BUCsel <- get_Buckets_upperSNR(buckets, outsnr, input$snrlevel, quantlevel=quantlevel)
-        outdata <- get_Buckets_dataset(specMat, bucketfile, input$normmeth, zoneref)
+        outdata <- get_Buckets_dataset(specMat, bucketfile, input$export_norm_meth, zoneref)
         nbfc <- length(colnames(outdata)) - length(buckets[,1])
         if ( length(BUCsel)>1 ) {
            if (specMat$nspec>1) {
@@ -441,7 +441,7 @@ write_qhnmr_wb <- function(wb, outDataViewer, zoneref, zonenoise)
 
          specMat <- get_specMat()
          outsnr <- get_SNR_dataset(specMat, bucketfile, c(min(zonenoise), max(zonenoise)), ratio=TRUE)
-         outdata <- get_Buckets_dataset(specMat, bucketfile, input$normmeth, zoneref)
+         outdata <- get_Buckets_dataset(specMat, bucketfile, input$export_norm_meth, zoneref)
          buckets <- read.table(bucketfile, header=F, sep="\t",stringsAsFactors=FALSE)
          buckets <- buckets[ buckets[,2]>0, ]
          BUCsel <- get_Buckets_upperSNR(buckets, outsnr, input$snrlevel)
@@ -669,7 +669,7 @@ add_about_wb <- function(wb, outDataViewer, zoneref, zonenoise, shid)
      ppmref <- ifelse( ! is.na(zoneref), paste0("[",round(min(zoneref),4),", ",round(max(zoneref),4),"]"), "none")
      infos <- rbind(infos,
          c("Export parameters",""),
-         c("Normalization",input$normmeth),
+         c("Normalization",input$export_norm_meth),
          c("SNR level", input$snrlevel),
          c("PPM noise", paste0("[",round(min(zonenoise),4),", ",round(max(zonenoise),4),"]")),
          c("PPM reference", ppmref),

@@ -20,7 +20,7 @@
                  procParams$SHIFTCALIB <<- TRUE
              }
              if (input$tpreproc=='normalisation') {
-                 procParams$NORM_METH <<- input$normeth
+                 procParams$SPECTRAL_NORM_METH <<- input$spectral_norm_meth
              }
              if (input$tpreproc=='baseline') {
                  procParams$BCTYPE <<- input$bctype
@@ -265,11 +265,28 @@
                  ERROR$MsgErrProc <- paste0( paste(as.list(infoLines), collapse="\n"),"\n\n" )
              }
              values$jobrun <- 0
+             # Track whether spectral-level normalization (Path A) has been applied
+             if (input$jobstatus != "Error" && isTRUE(procParams$PPM_NORMALISATION)) {
+                 values$spectralNormApplied <- procParams$SPECTRAL_NORM_METH
+             }
              return(1)
          })
     })
     outputOptions(output, 'Processed', suspendWhenHidden=FALSE)
     outputOptions(output, 'Processed', priority=1)
+
+    ## Warning banner shown in the Data Export panel when spectral normalization was already applied
+    output$spectralNormWarning <- renderUI({
+        req(values$spectralNormApplied != "")
+        tags$div(
+            class = "alert alert-warning",
+            style = "margin-top:8px; margin-bottom:4px;",
+            tags$strong(paste0("Spectral normalization already applied: ", values$spectralNormApplied, ".")),
+            " The stored spectra were permanently modified by preprocessing (Path A). ",
+            "Applying export normalization again will double-normalize the data. ",
+            "Select \u2018None\u2019 below unless you intentionally want to stack both normalizations."
+        )
+    })
 
 
     DS_ext <- reactive({

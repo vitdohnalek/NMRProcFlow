@@ -119,15 +119,22 @@ ui_proc_process <- column(12,
                   bsTooltip("ppmnoiserange4", "select a PPM range for estimate the standard deviation of the noise", "bottom", options = list(container = "body"))
               ))),
               conditionalPanel(condition="input.shiftcalib==1", column(4,
-                  numericInput("ppmshift2", "PPM shitf value:", 0, min = 0, max = 100, step=1),
-                  bsTooltip("ppmshift2", "PPM shitf value to be applied on the whole spectra", "bottom", options = list(container = "body"))
+                  numericInput("ppmshift2", "PPM shift value:", 0, min = 0, max = 100, step=1),
+                  bsTooltip("ppmshift2", "PPM shift value to be applied on the whole spectra", "bottom", options = list(container = "body"))
               ))
          ),
          # Normalisation
          conditionalPanel(condition="input.tpreproc=='normalisation'",
               column(4,
-                  selectInput("normeth", "Normalization Method:",
-                         c("Constant Sum Normalization" = "CSN", "Probabilistic Quotient Normalization" = "PQN"), selected = "CSN")
+                  selectInput("spectral_norm_meth", "Normalization Method (Spectral):",
+                         c("Constant Sum Normalization" = "CSN", "Probabilistic Quotient Normalization" = "PQN"), selected = "CSN"),
+                  bsTooltip("spectral_norm_meth",
+                      paste0("Spectral-level normalization (Path A): permanently modifies the stored spectral matrix before bucketing. ",
+                             "CSN equalizes gross signal intensity differences between spectra. ",
+                             "PQN corrects for dilution effects using probabilistic quotients. ",
+                             "Use this only for early intensity equalization when no further alignment is needed. ",
+                             "For standard metabolomics workflows, prefer leaving this as-is and apply normalization at the Data Export step instead."),
+                      "right", options = list(container = "body"))
               ),
               column(4,
                   tags$strong('Reference PPM ranges:', class="textlabs"),tags$br(), inputTextarea("ppmrange1", supclass="capture treset", nrows=10, ncols=22, value="")
@@ -348,8 +355,16 @@ ui_proc_export <- column(12,
      conditionalPanel(condition="input.eptype=='epdata' || input.eptype=='epxlsx'",
          column(3,
             # Normalization Method selection
-            selectInput("normmeth", "Normalization Method:",
+            selectInput("export_norm_meth", "Normalization Method (Bucket-level):",
                          c("None"= "NONE", "Constant Sum Normalization" = "CSN", "Probabilistic Quotient Normalization" = "PQN"), selected = "NONE"),
+            bsTooltip("export_norm_meth",
+                paste0("Bucket-level normalization (Path B): applied to integrated bucket values at export only — the stored spectra are NOT modified. ",
+                       "This is the standard approach for metabolomics: spectra are first aligned, then PQN quotients are computed on clean bucket integrals. ",
+                       "CSN rescales each spectrum so its total bucket sum equals a fixed constant. ",
+                       "PQN corrects for dilution using a median-quotient reference (requires a CSN pre-step, applied automatically). ",
+                       "Warning: if spectral normalization was already applied during preprocessing (Path A), selecting a method here will double-normalize the data."),
+                "right", options = list(container = "body")),
+            uiOutput("spectralNormWarning"),
             tags$strong('PPM range of the Reference:', class="textlabs"),tags$br(), inputTextarea("ppmnrefint", supclass="single", nrows=1, ncols=18, value=""),
             bsTooltip("ppmnrefint", "select the PPM range of the reference signal to normalize the integration (if relevant)", "bottom", options = list(container = "body")),
             tags$br(), tags$br(),

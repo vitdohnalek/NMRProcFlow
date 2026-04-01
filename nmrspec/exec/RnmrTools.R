@@ -7,6 +7,19 @@ suppressMessages(library(rjson))
 
 options(show.error.locations = TRUE)
 
+# Default noise PPM range for noise estimation, chosen per nucleus.
+# The region must be signal-free in typical metabolomics spectra.
+#   1H : 10.2-10.5 ppm  — beyond aromatic/aldehyde signals
+#   13C : -20 to -5 ppm — sub-zero region, no metabolite 13C signals exist here
+#         (do NOT use 200-220 ppm: that overlaps with carbonyls and may exceed PPM_MAX_13C=200)
+default_noise_range <- function(nuc) {
+    switch(nuc,
+        "1H"  = c(10.2, 10.5),
+        "13C" = c(-20, -5),
+        c(10.2, 10.5)        # fallback for unrecognised nuclei
+    )
+}
+
 # returns string w/o leading or trailing whitespace
 trim <- function (x) gsub("^\\s+|\\s+$", "", x)
 .N <- function(x) { as.numeric(as.vector(x)) }
@@ -45,7 +58,7 @@ Write.INI <- function(INI.file, metalist, EXCLU=c())
    for (i in 1:length(metalist)) {
       section <- names(metalist)[i]
       INI.list <- c( INI.list, paste0('[',section,']') )
-      M<-unlist(eval(parse(text=paste0('metalist$',section))))
+      M<-unlist(metalist[[section]])
       for ( k in 1:length(M) ) {
           if ( names(M[k]) %in% EXCLU ) next
           INI.list <- c( INI.list, paste0(names(M[k]),'=',M[k],sep="") )
@@ -75,15 +88,17 @@ Parse.INI <- function(INI.file, INI.list=list(), section="PROCPARAMS")
    
    #INI.list <- list()
    for( i in 1:dim(d)[1] ) {
-        if (! is.na(suppressWarnings(as.numeric(d$V2[i])))) {
-            eval(parse(text=paste0('INI.list$',d$V1[i], '<-', as.numeric(d$V2[i]))))
+        key <- d$V1[i]
+        val <- d$V2[i]
+        if (! is.na(suppressWarnings(as.numeric(val)))) {
+            INI.list[[key]] <- as.numeric(val)
             next
         }
-        if (! is.na(suppressWarnings(as.logical(d$V2[i])))) {
-            eval(parse(text=paste0('INI.list$',d$V1[i], '<-', as.logical(d$V2[i]))))
+        if (! is.na(suppressWarnings(as.logical(val)))) {
+            INI.list[[key]] <- as.logical(val)
             next
         }
-        eval(parse(text=paste0('INI.list$',d$V1[i], '<-"', d$V2[i],'"')))
+        INI.list[[key]] <- val
    }
    return(INI.list)
 }
@@ -150,7 +165,8 @@ generate_Metadata_File <- function(RawZip, DATADIR, procParams)
    RAWDIR <- dirname(RawZip)
    ext <- tolower(gsub("^.*\\.", "", RawZip))
    if (ext=='7z') {
-       system(paste0("cd ",RAWDIR,"; 7zr x -y ",RawZip))
+       # Use system2 with explicit argument vector to prevent shell injection via filename
+       system2("7zr", args=c("x", "-y", paste0("-o", RAWDIR), RawZip))
    } else {
        unzip(RawZip, files = NULL, list = FALSE, overwrite = TRUE,  junkpaths = FALSE, exdir = RAWDIR, unzip = "internal",   setTimes = FALSE)
    }
@@ -418,42 +434,94 @@ RCalib1D <- function(specMat, PPM_NOISE_AREA, zoneref, ppmref, type='s', Progres
 #------------------------------
 # Normalisation of the Intensities
 #------------------------------
-RNorm1D <- function(specMat, normmeth, zones)
+RNorm1D <- function(specMat, norm_method, zones)
 {
    N <- dim(zones)[1]
-   if (N>1) registerDoParallel(cores=2)
-
-   if (normmeth=='CSN') {
-      # 1/ Integration of each zone ...
-      SUM <- foreach(i=1:N, .combine='+') %dopar% {
-          i1<-length(which(specMat$ppm>max(zones[i,])))
-          i2<-which(specMat$ppm<=min(zones[i,]))[1]
-          simplify2array(lapply( 1:specMat$nspec, function(x) {
-                0.5*(specMat$int[x, i1] + specMat$int[x, i2]) + sum(specMat$int[x,(i1+1):(i2-1)])
-          }))
-      }
-      COEFF <- SUM/mean(SUM)
+   # Use sequential foreach for single zone to avoid requiring a registered backend
+   if (N > 1) {
+      registerDoParallel(cores=2)
+      `%norm_op%` <- `%dopar%`
+   } else {
+      `%norm_op%` <- `%do%`
    }
-   if (normmeth=='PQN') { # TOTO: cf https://github.com/tkimhofer/metabom8/blob/master/R/pqn.R
-      # 1/ Get spectra values for each zone ...
-      SUBMAT <- foreach(i=1:N, .combine=cbind) %dopar% {
-          i1<-length(which(specMat$ppm>max(zones[i,])))
-          i2<-which(specMat$ppm<=min(zones[i,]))[1]
-          # .. for each spectrum
-          t(simplify2array(lapply( 1:specMat$nspec, function(x) { specMat$int[x,i1:i2] })))
+
+   # Helper: integrate a single zone across all spectra (trapezoidal rule)
+   .integrate_zone <- function(int_mat, ppm, zone) {
+       i1 <- length(which(ppm > max(zone)))
+       i2 <- which(ppm <= min(zone))[1]
+       # Guard: zone outside spectral range or too narrow
+       if (is.na(i1) || is.na(i2) || i1 == 0 || i2 <= i1) {
+           warning(paste0("Normalization: zone (", min(zone), ", ", max(zone),
+                          ") is outside the spectral range or too narrow; returning zeros"))
+           return(rep(0, nrow(int_mat)))
+       }
+       simplify2array(lapply(1:nrow(int_mat), function(x) {
+           if (i2 == i1 + 1) {
+               # Only two boundary points, no interior — simple trapezoid
+               0.5*(int_mat[x, i1] + int_mat[x, i2])
+           } else {
+               0.5*(int_mat[x, i1] + int_mat[x, i2]) + sum(int_mat[x, (i1+1):(i2-1)])
+           }
+       }))
+   }
+
+   # Helper: guard a coefficient vector against zero/NaN/Inf
+   .guard_coeff <- function(coeff) {
+       bad <- coeff == 0 | is.nan(coeff) | is.infinite(coeff)
+       if (any(bad)) {
+           warning(paste0("Normalization: coefficient is zero/NaN/Inf for spectra: ",
+                          paste(which(bad), collapse=", "), "; leaving those spectra unnormalized"))
+           coeff[bad] <- 1.0
+       }
+       coeff
+   }
+
+   if (norm_method=='CSN') {
+      # Integrate each zone and sum across zones
+      SUM <- foreach(i=1:N, .combine='+') %norm_op% {
+          .integrate_zone(specMat$int, specMat$ppm, zones[i,])
       }
-      # Calculate the most probable quotient
+      meanSUM <- mean(SUM)
+      if (meanSUM == 0 || is.nan(meanSUM)) {
+          warning("CSN: mean normalization coefficient is zero/NaN; skipping normalization")
+          return(specMat)
+      }
+      COEFF <- .guard_coeff(SUM / meanSUM)
+   }
+
+   if (norm_method=='PQN') {
+      # Step 1: Initial CSN pre-normalization (required per Dieterle et al. 2006)
+      SUM <- foreach(i=1:N, .combine='+') %norm_op% {
+          .integrate_zone(specMat$int, specMat$ppm, zones[i,])
+      }
+      meanSUM <- mean(SUM)
+      if (meanSUM == 0 || is.nan(meanSUM)) {
+          warning("PQN: CSN pre-normalization mean is zero/NaN; skipping normalization")
+          return(specMat)
+      }
+      CSN_COEFF <- .guard_coeff(SUM / meanSUM)
+      CSN_INT <- specMat$int / CSN_COEFF
+
+      # Steps 2-4: PQN on the CSN-normalized intensities
+      SUBMAT <- foreach(i=1:N, .combine=cbind) %norm_op% {
+          i1 <- length(which(specMat$ppm > max(zones[i,])))
+          i2 <- which(specMat$ppm <= min(zones[i,]))[1]
+          t(simplify2array(lapply(1:specMat$nspec, function(x) { CSN_INT[x, i1:i2] })))
+      }
       V <- apply(SUBMAT, 2, median)
-      SUBMAT <- SUBMAT[, V!=0]
-      V <- V[V!=0]
-      MQ <- t(t(SUBMAT)/V)
-      COEFF <- apply(MQ,1,median)
+      SUBMAT <- SUBMAT[, V != 0, drop=FALSE]
+      V <- V[V != 0]
+      if (length(V) == 0) {
+          warning("PQN: all reference column medians are zero; skipping normalization")
+          return(specMat)
+      }
+      MQ <- t(t(SUBMAT) / V)
+      PQN_COEFF <- apply(MQ, 1, median)
+      COEFF <- .guard_coeff(CSN_COEFF * PQN_COEFF)
    }
 
-   # 2/ Apply to each spectrum, its corresponding coefficient
-   MatInt <- specMat$int/COEFF
-   specMat$int <- MatInt
-   #V <- lapply( 1:specMat$nspec, function(x) { specMat$int[x,] <<- specMat$int[x,]/COEFF[x] } )
+   # Apply coefficient: divide each spectrum (row) by its coefficient
+   specMat$int <- specMat$int / COEFF
    return(specMat)
 }
 
@@ -745,14 +813,14 @@ RAlign1D <- function(specMat, zone, RELDECAL=0.05, idxSref=0, Selected=NULL, fap
 #------------------------------
 # CluPA : Alignment of the selected PPM ranges
 #------------------------------
-RCluPA1D <- function(specMat, zonenoise, zone, resolution=0.02, SNR=3, idxSref=0, Selected=NULL, ProgressFile=NULL)
+RCluPA1D <- function(specMat, zonenoise, zone, resolution=0.02, SNR=3, idxSref=0, Selected=NULL, ProgressFile=NULL, nuc="1H")
 {
    i1 <- ifelse( max(zone)>=specMat$ppm_max, 1, length(which(specMat$ppm>max(zone))) )
    i2 <- ifelse( min(zone)<=specMat$ppm_min, specMat$size - 1, which(specMat$ppm<=min(zone))[1] )
 
    # Noise estimation
    if (is.na(zonenoise)) {
-       PPM_NOISE_AREA <- c(10.2, 10.5)
+       PPM_NOISE_AREA <- default_noise_range(nuc)
    } else {
       PPM_NOISE_AREA <- c(min(zonenoise), max(zonenoise))
    }
@@ -850,7 +918,7 @@ RBucket1D <- function(specMat, Algo, resol, snr, zones, zonenoise, LOGFILE=NULL,
    if (Algo %in% c('aibin','unif','erva')) {
       # Noise estimation
       if (is.na(zonenoise)) {
-          PPM_NOISE_AREA <- c(10.2, 10.5)
+          PPM_NOISE_AREA <- default_noise_range(NUC)
       } else {
          PPM_NOISE_AREA <- c(min(zonenoise), max(zonenoise))
       }
@@ -1050,16 +1118,19 @@ RProcCMD1D <- function(specMat, specParamsDF, CMDTEXT, NCPU=1, LOGFILE=NULL, Pro
           if (cmdName == lbNORM) {
               params <- cmdPars[-1]
               if (length(params)==2) {
+                 # Legacy 2-parameter format: "normalisation <ppm_min> <ppm_max>"
+                 # Method is not stored in this format; default to CSN and warn.
                  params <- as.numeric(params)
                  PPMRANGE <- c( min(params[1:2]), max(params[1:2]) )
-                 Write.LOG(LOGFILE,paste0("Rnmr1D:  Normalisation: Zone Ref = (",PPMRANGE[1],",",PPMRANGE[2],")"));
+                 Write.LOG(LOGFILE,paste0("Rnmr1D:  Normalisation (legacy format, defaulting to CSN): Zone Ref = (",PPMRANGE[1],",",PPMRANGE[2],")"))
+                 warning("Macro replay: legacy 2-parameter normalisation format does not encode the method; replaying as CSN. Re-save the macro to preserve the original method.")
                  registerDoParallel(cores=NCPU)
-                 specMat <- RNorm1D(specMat, normmeth='CSN', zones=matrix(PPMRANGE,nrow=1, ncol=2))
+                 specMat <- RNorm1D(specMat, norm_method='CSN', zones=matrix(PPMRANGE,nrow=1, ncol=2))
                  specMat$fWriteSpec <- TRUE
                  CMD <- CMD[-1]
               }
               if (length(params)==1) {
-                 NORM_METH <- params[1]
+                 SPECTRAL_NORM_METH <- params[1]
                  CMD <- CMD[-1]
                  zones <- NULL
                  while(CMD[1] != EOL) {
@@ -1067,9 +1138,9 @@ RProcCMD1D <- function(specMat, specParamsDF, CMDTEXT, NCPU=1, LOGFILE=NULL, Pro
                     CMD <- CMD[-1]
                  }
                  Write.LOG(LOGFILE,"Rnmr1D:  Normalisation of the Intensities based on the selected PPM ranges...")
-                 Write.LOG(LOGFILE,paste0("Rnmr1D:     Method =",NORM_METH))
+                 Write.LOG(LOGFILE,paste0("Rnmr1D:     Method =",SPECTRAL_NORM_METH))
                  registerDoParallel(cores=NCPU)
-                 specMat <- RNorm1D(specMat, normmeth=NORM_METH, zones=zones)
+                 specMat <- RNorm1D(specMat, norm_method=SPECTRAL_NORM_METH, zones=zones)
                  specMat$fWriteSpec <- TRUE
                  CMD <- CMD[-1]
               }
@@ -1306,18 +1377,27 @@ RProcCMD1D <- function(specMat, specParamsDF, CMDTEXT, NCPU=1, LOGFILE=NULL, Pro
 #----
 # Generates the buckets table
 #----
+# Parse a bucket_list.in file into a tidy data frame.
+# Columns returned: center, width, min, max, name
+# Zero-width buckets are dropped; abs(width) guards against negative widths.
+read_bucket_file <- function(bucketfile) {
+    buckets <- read.table(bucketfile, header=F, sep="\t", stringsAsFactors=FALSE)
+    buckets <- buckets[ buckets[,2] > 0, ]
+    colnames(buckets) <- c("center", "width")
+    buckets$min  <- buckets$center - 0.5 * abs(buckets$width)
+    buckets$max  <- buckets$center + 0.5 * abs(buckets$width)
+    buckets$name <- gsub("^(-?\\d+)", "B\\1",
+                         gsub("\\.", "_",
+                              gsub(" ", "", sprintf("%7.4f", buckets$center))))
+    buckets
+}
+
+#----
 get_Buckets_table <- function(bucketfile)
 {
    outtable <- NULL
    if ( file.exists(bucketfile) ) {
-      # Read the buckets
-      buckets <- read.table(bucketfile, header=F, sep="\t",stringsAsFactors=FALSE)
-      buckets <- buckets[ buckets[,2]>0, ]
-      colnames(buckets) <- c("center", "width")
-      buckets$name <- gsub("^(-?\\d+)","B\\1", gsub("\\.", "_", gsub(" ", "", sprintf("%7.4f",buckets[,1]))) )
-      buckets$min <- buckets[,1]-0.5*buckets[,2]
-      buckets$max <- buckets[,1]+0.5*buckets[,2]
-
+      buckets <- read_bucket_file(bucketfile)
       outtable <- buckets[, c("name", "center", "min", "max", "width") ]
    }
    return(outtable)
@@ -1326,15 +1406,12 @@ get_Buckets_table <- function(bucketfile)
 #----
 # Generates the buckets data set
 #----
-get_Buckets_dataset <- function(specMat, bucketfile, norm_meth='CSN', zoneref=NA, YMAX=FALSE)
+get_Buckets_dataset <- function(specMat, bucketfile, norm_method='CSN', zoneref=NA, YMAX=FALSE)
 {
    outdata <- NULL
    if ( file.exists(bucketfile) ) {
       # Read the buckets
-      buckets <- read.table(bucketfile, header=F, sep="\t",stringsAsFactors=FALSE)
-      buckets <- buckets[ buckets[,2]>0, ]
-      buckets$min <- buckets[,1]-0.5*abs(buckets[,2])
-      buckets$max <- buckets[,1]+0.5*abs(buckets[,2])
+      buckets <- read_bucket_file(bucketfile)
 
       # get index of buckets' ranges
       buckets_m <- t(simplify2array(lapply( c( 1:(dim(buckets)[1]) ),  function(x){ 
@@ -1349,15 +1426,29 @@ get_Buckets_dataset <- function(specMat, bucketfile, norm_meth='CSN', zoneref=NA
       } else {
       # Integration
           buckets_IntVal <- C_all_buckets_integrate (specMat$int, buckets_m, 0)
-          if (norm_meth == 'CSN') {
+          if (norm_method == 'CSN') {
               buckets_IntVal <- C_buckets_CSN_normalize( buckets_IntVal )
           }
-          if (norm_meth == 'PQN') {
+          if (norm_method == 'PQN') {
               buckets_IntVal_CSN <- C_buckets_CSN_normalize( buckets_IntVal )
               bucVref_IntVal <- C_MedianSpec(buckets_IntVal_CSN)
-              bucRatio <- sweep(buckets_IntVal_CSN, 2, bucVref_IntVal, "/")
-              Coeff <- apply(bucRatio,1,median)
-              buckets_IntVal <- sweep(buckets_IntVal_CSN, 1, Coeff, "/")
+              # For the quotient calculation, exclude columns where the reference is zero
+              nonzero_cols <- bucVref_IntVal != 0
+              if (!any(nonzero_cols)) {
+                  warning("PQN: reference spectrum is entirely zero; skipping normalization")
+              } else {
+                  bucRatio <- sweep(buckets_IntVal_CSN[, nonzero_cols, drop=FALSE], 2,
+                                    bucVref_IntVal[nonzero_cols], "/")
+                  Coeff <- apply(bucRatio, 1, median)
+                  bad_coeff <- Coeff == 0 | is.nan(Coeff) | is.infinite(Coeff)
+                  if (any(bad_coeff)) {
+                      warning(paste0("PQN: median quotient is zero/NaN/Inf for spectra: ",
+                                     paste(which(bad_coeff), collapse=", "), "; leaving unnormalized"))
+                      Coeff[bad_coeff] <- 1.0
+                  }
+                  # Apply Coeff to the full-width CSN matrix (not the filtered subset)
+                  buckets_IntVal <- sweep(buckets_IntVal_CSN, 1, Coeff, "/")
+              }
           }
       }
 
@@ -1366,10 +1457,16 @@ get_Buckets_dataset <- function(specMat, bucketfile, norm_meth='CSN', zoneref=NA
           istart <- length(which(specMat$ppm>max(zoneref)))
           iend <- length(which(specMat$ppm>min(zoneref)))
           Vref <- C_spectra_integrate (specMat$int, istart, iend)
+          bad_ref <- Vref == 0 | is.nan(Vref) | is.infinite(Vref)
+          if (any(bad_ref)) {
+              warning(paste0("Reference signal normalization: integral is zero/NaN/Inf for spectra: ",
+                             paste(which(bad_ref), collapse=", "), "; leaving unnormalized"))
+              Vref[bad_ref] <- 1.0
+          }
           buckets_IntVal <- buckets_IntVal/Vref
       }
       # Bucket names
-      bucnames <- gsub("^(-?\\d+)","B\\1", gsub("\\.", "_", gsub(" ", "", sprintf("%7.4f",buckets[,1]))) )
+      bucnames <- buckets$name
 
       # read samples
       samplesFile <- file.path(dirname(bucketfile),'samples.csv')
@@ -1415,10 +1512,7 @@ get_SNR_dataset <- function(specMat, bucketfile, zone_noise, ratio=TRUE)
       factorsFile <- file.path(dirname(bucketfile),"factors")
       factors <- read.table(factorsFile, header=F, sep=";", stringsAsFactors=FALSE)
       # Read the buckets
-      buckets <- read.table(bucketfile, header=F, sep="\t",stringsAsFactors=FALSE)
-      buckets <- buckets[ buckets[,2]>0, ]
-      buckets$min <- buckets[,1]-0.5*buckets[,2]
-      buckets$max <- buckets[,1]+0.5*buckets[,2]
+      buckets <- read_bucket_file(bucketfile)
       # get index of buckets' ranges
       buckets_m <- t(simplify2array(lapply( c( 1:(dim(buckets)[1]) ),
                      function(x) { c( length(which(specMat$ppm>buckets[x,]$max)), length(which(specMat$ppm>buckets[x,]$min)) ) }
@@ -1430,7 +1524,7 @@ get_SNR_dataset <- function(specMat, bucketfile, zone_noise, ratio=TRUE)
       Vnoise <- abs( C_noise_estimate(specMat$int, i1, i2, flg) )
       MaxVals <- C_maxval_buckets (specMat$int, buckets_m)
       # write the data table
-      bucnames <- gsub("^(-?\\d+)","B\\1", gsub("\\.", "_", gsub(" ", "", sprintf("%7.4f",buckets[,1]))) )
+      bucnames <- buckets$name
       if (ratio) {
          outdata <- cbind( samples[, -1], MaxVals/(2*Vnoise))
          colnames(outdata) <- c( factors[,2], bucnames )

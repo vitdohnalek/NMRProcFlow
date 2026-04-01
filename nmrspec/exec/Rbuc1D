@@ -126,7 +126,7 @@ repeat {
    # Noise estimation
    zone <- suppressWarnings(as.numeric(simplify2array(strsplit(procParams$PPMNOISERANGE, " "))))
    if (is.na(zone)) {
-       PPM_NOISE_AREA <- c(10, 10.5)
+       PPM_NOISE_AREA <- default_noise_range(NUC)
    } else {
        PPM_NOISE_AREA <- c(min(zone), max(zone))
    }
@@ -232,7 +232,7 @@ repeat {
    # Noise estimation
    zone <- suppressWarnings(as.numeric(simplify2array(strsplit(procParams$PPMNOISERANGE, " "))))
    if (is.na(zone)) {
-       PPM_NOISE_AREA <- c(10, 10.5)
+       PPM_NOISE_AREA <- default_noise_range(NUC)
    } else {
        PPM_NOISE_AREA <- c(min(zone), max(zone))
    }
@@ -329,7 +329,7 @@ repeat {
    # Noise estimation
    zone <- suppressWarnings(as.numeric(simplify2array(strsplit(procParams$PPMNOISERANGE, " "))))
    if (is.na(zone)) {
-       PPM_NOISE_AREA <- c(10, 10.5)
+       PPM_NOISE_AREA <- default_noise_range(NUC)
    } else {
        PPM_NOISE_AREA <- c(min(zone), max(zone))
    }
@@ -409,9 +409,7 @@ repeat {
    if (! file.exists(bucketfile)) break
 
    # get the Buckets PPM ranges list
-   buckets <- read.table(bucketfile, header=F, sep="\t",stringsAsFactors=FALSE)
-   buckets$min <- buckets[,1]-0.5*buckets[,2]
-   buckets$max <- buckets[,1]+0.5*buckets[,2]
+   buckets <- read_bucket_file(bucketfile)
    buckets <- buckets[ order(buckets$max, decreasing = TRUE), ]
    nb_before <- dim(buckets)[1]
 

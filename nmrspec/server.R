@@ -52,6 +52,7 @@ function(input, output, session) {
     values$psession <- 0
     values$fgalaxy <- 0
     values$uploadmsg <- 0
+    values$spectralNormApplied <- ""   # "" = none; "CSN" or "PQN" = method applied via Path A
 
     source("Rsrc/utils.R", local=TRUE)     # general routines
     source("Rsrc/Login.R", local=TRUE)     # Log in module

@@ -59,6 +59,10 @@ Write.LOG(LOGFILE, paste0('Ralign1D:  Read the spectra processing parameters fil
 specParamFile <- file.path(DATADIR,"list_pars.csv")
 specParamsDF <- read.table(specParamFile, header=T, sep=";", stringsAsFactors=FALSE)
 
+# Read the nucleus type for nucleus-aware defaults (e.g. noise range)
+nucFile <- file.path(DATADIR,'nuc.txt')
+NUC <- if (file.exists(nucFile)) readLines(nucFile)[1] else "1H"
+
 # Read the specs.pack
 Write.LOG(LOGFILE,"Ralign1D:  Read the specs.pack...")
 specPackFile <- file.path(DATADIR,conf$SPEC_PACKED)
@@ -219,7 +223,7 @@ repeat {
            Write.LOG(LOGFILE,paste0("Ralign1D:  Reference spectrum: ", samples[procParams$IDXSREF,2]))
        zone <- as.numeric(simplify2array(strsplit(procParams$PPMNOISERANGE, " ")))
        if (is.na(zone)) {
-           PPM_NOISE_AREA <- c(10.2, 10.5)
+           PPM_NOISE_AREA <- default_noise_range(NUC)
        } else {
            PPM_NOISE_AREA <- c(min(zone), max(zone))
        }
