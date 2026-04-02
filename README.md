@@ -207,26 +207,70 @@ This removes the container, image, and any dangling Docker resources.
 
 #### Removing the Docker bridge network (WSL2)
 
-After stopping Docker, the `docker0` bridge interface may remain and interfere with network routing (e.g. SSH connections failing with "No route to host"). To remove it:
+On some WSL2 networks, the `docker0` bridge interface can interfere with routing (e.g. SSH connections failing with "No route to host"). This happens when Docker's default bridge subnet overlaps with your destination network.
+
+**Important:** Docker needs the `docker0` bridge to build images and run containers. Only remove it after you are done using Docker.
+
+Recommended workflow:
 
 ```
+    # 1. Start Docker, build, and run
+    $ sudo snap restart docker
+    $ sudo sh ./npflow build
+    $ sudo sh ./npflow start
+
+    # 2. When done, stop everything and remove the bridge
+    $ sudo sh ./npflow stop
+    $ sudo snap stop docker
     $ sudo ip link set docker0 down
     $ sudo ip link delete docker0
 ```
 
-This is needed when Docker's default bridge subnet overlaps with your destination network. If you restart Docker, the `docker0` interface will be recreated. To prevent Docker from creating it at all, add a daemon configuration:
+To prevent Docker from creating the bridge at all (note: this breaks `docker build`):
 
 ```
     $ sudo mkdir -p /etc/docker
     $ echo '{"bridge": "none"}' | sudo tee /etc/docker/daemon.json
 ```
 
+If you use this option, remove `/etc/docker/daemon.json` before building again.
+
 
 See more information in http://nmrprocflow.org/c_download
 
----
 
-[![](https://images.microbadger.com/badges/image/nmrprocflow/nmrprocflow.svg)](https://microbadger.com/images/nmrprocflow/nmrprocflow "Get your own image badge on microbadger.com")
+### Project structure
+
+```
+nmrspec/
+├── server.R                  # Shiny server entry point
+├── global.R                  # Global setup, sources RnmrTools.R
+├── exec/
+│   ├── RnmrTools.R           # Main loader — sources all modules below
+│   ├── lib/
+│   │   ├── utils.R           # String helpers, counters, INI/LOG I/O, default_noise_range()
+│   │   ├── stack.R           # Undo history (push/pop/clean)
+│   │   ├── metadata.R        # Sample metadata generation from raw spectra archives
+│   │   ├── baseline.R        # Baseline correction (Whittaker, airPLS, global, local, q-NMR)
+│   │   ├── alignment.R       # Spectral alignment (CluPA, PTW, least-squares, shift)
+│   │   ├── normalization.R   # Calibration and normalization (CSN, PQN)
+│   │   ├── processing.R      # Denoising (Savitzky-Golay), zeroing, smoothing
+│   │   ├── bucketing.R       # Spectral binning algorithms and macro-command validation
+│   │   ├── macro.R           # Macro-command file replay (RProcCMD1D)
+│   │   └── export.R          # Bucket/SNR dataset generation and spectra data export
+│   ├── libspec/              # C++ (Rcpp) low-level spectral functions
+│   ├── Rcorr1D               # Preprocessing entry point
+│   ├── Ralign1D              # Alignment entry point
+│   ├── Rbuc1D                # Bucketing entry point
+│   └── Rnmr1D                # Main processing entry point
+├── Rsrc/
+│   ├── Proc1.R – Proc4.R    # Shiny server modules (upload, processing, bucketing, export)
+│   ├── ui_procparams.R       # Processing parameter UI
+│   └── utils.R               # Shiny utility functions
+└── conf/                     # Apache, Shiny Server, and app configuration
+```
+
+`RnmrTools.R` is a thin loader that imports libraries and sources the 10 modules in `exec/lib/`. All callers (`global.R`, `Rnmr1D`, `Rcorr1D`, `Ralign1D`, `Rbuc1D`) continue to `source("exec/RnmrTools.R")` — no caller changes needed.
 
 ---
 
