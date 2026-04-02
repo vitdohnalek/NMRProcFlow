@@ -113,6 +113,99 @@ USRCONMGR=0
 #### check on http://<your_local_host>:<port>/npflow/
 
 
+### Running on WSL2 (Windows Subsystem for Linux)
+
+If you are running on WSL2 with Docker installed via **snap**, the default `/opt/data` path may be on a read-only filesystem. Follow these steps instead:
+
+#### 1. Install Docker (snap)
+
+If Docker is not yet installed:
+
+```
+    $ sudo snap install docker
+    $ sudo snap start docker
+```
+
+Verify it works:
+
+```
+    $ sudo docker info
+```
+
+#### 2. Configure for WSL2
+
+Edit `./etc/config.ini` and set `DEV=1` (development mode), then add a `DEV_DATADIR` line pointing to a writable location on your host:
+
+```
+    DEV=1
+    HTTP_PORT=8081
+    DATASETS=/opt/data
+    DEV_DATADIR=/home/<your_username>/nmrprocflow_data
+```
+
+`DATASETS=/opt/data` is the path inside the container (do not change it). `DEV_DATADIR` is the host-side directory used as the Docker volume mount source.
+
+Create the data directory:
+
+```
+    $ mkdir -p /home/<your_username>/nmrprocflow_data
+```
+
+#### 3. Build and run
+
+```
+    $ sudo sh ./npflow build
+    $ sudo sh ./npflow start
+```
+
+In dev mode (DEV=1), the application runs on the port specified in `config.ini` (default 8081). Open your browser at:
+
+```
+    http://localhost:8081/npflow/
+```
+
+Dev mode mounts `./nmrspec/` and `./nmrviewer/www/` into the container, so code changes on your host are reflected without rebuilding.
+
+
+### Stopping and cleaning up
+
+#### Stop the application
+
+```
+    $ sh ./npflow stop
+```
+
+This stops and removes the running container.
+
+#### Remove the Docker image
+
+```
+    $ sudo docker rmi nmrprocflow/nmrprocflow:latest
+```
+
+#### Remove all data
+
+```
+    $ rm -rf /home/<your_username>/nmrprocflow_data
+```
+
+Or if you used the default path:
+
+```
+    $ sudo rm -rf /opt/data
+```
+
+#### Full cleanup (stop container, remove image, prune)
+
+```
+    $ sh ./npflow stop
+    $ sudo docker rmi nmrprocflow/nmrprocflow:latest
+    $ sudo docker system prune -f
+```
+
+This removes the container, image, and any dangling Docker resources.
+
+
 See more information in http://nmrprocflow.org/c_download
 
 ---
