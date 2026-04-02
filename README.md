@@ -205,6 +205,22 @@ Or if you used the default path:
 
 This removes the container, image, and any dangling Docker resources.
 
+#### Removing the Docker bridge network (WSL2)
+
+After stopping Docker, the `docker0` bridge interface may remain and interfere with network routing (e.g. SSH connections failing with "No route to host"). To remove it:
+
+```
+    $ sudo ip link set docker0 down
+    $ sudo ip link delete docker0
+```
+
+This is needed when Docker's default bridge subnet overlaps with your destination network. If you restart Docker, the `docker0` interface will be recreated. To prevent Docker from creating it at all, add a daemon configuration:
+
+```
+    $ sudo mkdir -p /etc/docker
+    $ echo '{"bridge": "none"}' | sudo tee /etc/docker/daemon.json
+```
+
 
 See more information in http://nmrprocflow.org/c_download
 
